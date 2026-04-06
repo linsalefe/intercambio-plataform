@@ -2,31 +2,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from app.database import get_db
-from app.models import ExactLead, CourseAlias
+from app.models import ExactLead
 from app.exact_spotter import sync_exact_leads
 
 router = APIRouter(prefix="/api/exact-leads", tags=["exact-leads"])
-
-
-async def resolve_course_name(sub_source: str, db: AsyncSession) -> str:
-    """Resolve alias do curso para nome legivel via tabela course_aliases."""
-    if not sub_source:
-        return "Pós-Graduação"
-    result = await db.execute(
-        select(CourseAlias).where(
-            func.lower(CourseAlias.alias) == func.lower(sub_source),
-            CourseAlias.is_active == True,
-        )
-    )
-    course = result.scalar_one_or_none()
-    if course:
-        return course.short_name
-    # Fallback: remove prefixo pos e formata
-    name = sub_source
-    if name.lower().startswith("pos"):
-        name = name[3:]
-    name = name.replace("_", " ").replace("-", " ").strip()
-    return name if name else "Pós-Graduação"
 
 
 @router.get("")
@@ -113,16 +92,13 @@ async def get_lead_details(exact_id: int):
     base = "https://api.exactspotter.com/v3"
 
     async with httpx.AsyncClient(timeout=30) as client:
-        # Lead
         lead_res = await client.get(f"{base}/Leads", headers=headers, params={"$filter": f"id eq {exact_id}"})
         lead_data = lead_res.json().get("value", [])
         lead = lead_data[0] if lead_data else None
 
-        # Persons
         person_res = await client.get(f"{base}/Persons", headers=headers, params={"$filter": f"leadId eq {exact_id}"})
         persons = person_res.json().get("value", [])
 
-        # QualificationHistories
         qual_res = await client.get(f"{base}/QualificationHistories", headers=headers, params={"$filter": f"leadId eq {exact_id}"})
         qualifications = qual_res.json().get("value", [])
 
@@ -174,32 +150,7 @@ async def bulk_send_template(
     request: dict,
     db: AsyncSession = Depends(get_db)
 ):
-    """
-    Envio em massa com mapeamento dinâmico de variáveis.
-
-    param_mappings: lista de objetos com type e value (opcional).
-    Tipos suportados:
-      - lead_name: primeiro nome do lead
-      - lead_full_name: nome completo do lead
-      - lead_course: nome do curso (resolvido via aliases)
-      - sdr_name: nome do SDR do lead
-      - fixed_text: texto fixo (usa o campo "value")
-
-    Exemplo:
-    {
-      "template_name": "sdr_primeiro_contato",
-      "channel_id": 1,
-      "lead_ids": [1, 2, 3],
-      "param_mappings": [
-        {"type": "lead_name"},
-        {"type": "sdr_name"},
-        {"type": "lead_course"}
-      ]
-    }
-
-    Compatibilidade: se param_mappings não for enviado, usa o campo
-    "parameters" antigo (nome + curso).
-    """
+    """Envio em massa de templates para leads selecionados."""
     from app.models import Channel, Contact, Message
     from app.whatsapp import send_template_message
     from datetime import datetime, timedelta, timezone
@@ -212,18 +163,14 @@ async def bulk_send_template(
     channel_id = request.get("channel_id", 1)
     lead_ids = request.get("lead_ids", [])
     param_mappings = request.get("param_mappings", None)
-    parameters = request.get("parameters", [])
 
     if not template_name or not lead_ids:
         raise HTTPException(status_code=400, detail="template_name e lead_ids são obrigatórios")
 
-    # Buscar leads
     result = await db.execute(select(ExactLead).where(ExactLead.id.in_(lead_ids)))
     leads = result.scalars().all()
 
-    # Buscar channel
-    from sqlalchemy import select as sa_select
-    ch_result = await db.execute(sa_select(Channel).where(Channel.id == channel_id))
+    ch_result = await db.execute(select(Channel).where(Channel.id == channel_id))
     channel = ch_result.scalar_one_or_none()
     if not channel:
         raise HTTPException(status_code=404, detail="Canal não encontrado")
@@ -241,39 +188,24 @@ async def bulk_send_template(
 
         phone = phone.replace("+", "").replace(" ", "").replace("-", "")
 
-        # Resolver valores das variáveis
+        # Resolver parâmetros
+        lead_params = None
         if param_mappings and len(param_mappings) > 0:
-            # Modo novo: mapeamento dinâmico
             lead_params = []
             for mapping in param_mappings:
                 m_type = mapping.get("type", "fixed_text")
                 m_value = mapping.get("value", "")
 
                 if m_type == "lead_name":
-                    lead_params.append(lead.name.split()[0] if lead.name else "Aluno(a)")
+                    lead_params.append(lead.name.split()[0] if lead.name else "")
                 elif m_type == "lead_full_name":
-                    lead_params.append(lead.name if lead.name else "Aluno(a)")
-                elif m_type == "lead_course":
-                    course = await resolve_course_name(lead.sub_source, db)
-                    lead_params.append(course)
+                    lead_params.append(lead.name if lead.name else "")
                 elif m_type == "sdr_name":
-                    lead_params.append(lead.sdr_name if lead.sdr_name else "Equipe CENAT")
+                    lead_params.append(lead.sdr_name if lead.sdr_name else "Equipe")
                 elif m_type == "fixed_text":
-                    lead_params.append(m_value if m_value else "")
+                    lead_params.append(m_value)
                 else:
-                    lead_params.append(m_value if m_value else "")
-        else:
-            # Modo legado: compatibilidade com frontend antigo
-            lead_name = lead.name.split()[0] if lead.name else "Aluno(a)"
-            lead_course = await resolve_course_name(lead.sub_source, db)
-            param_count = len(parameters) if parameters else 0
-
-            if param_count == 0:
-                lead_params = None
-            elif param_count == 1:
-                lead_params = [lead_name]
-            else:
-                lead_params = [lead_name, lead_course]
+                    lead_params.append(m_value)
 
         try:
             result = await send_template_message(
@@ -285,7 +217,6 @@ async def bulk_send_template(
             if "messages" in result:
                 wa_id = result.get("contacts", [{}])[0].get("wa_id", phone)
 
-                # Criar contato se não existir
                 contact_result = await db.execute(
                     select(Contact).where(Contact.wa_id == wa_id)
                 )
@@ -294,7 +225,6 @@ async def bulk_send_template(
                     db.add(Contact(wa_id=wa_id, name=lead.name, channel_id=channel_id))
                     await db.flush()
 
-                # Salvar mensagem
                 content_text = f"[Template] {', '.join(lead_params)}" if lead_params else f"[Template] {template_name}"
 
                 msg = Message(
@@ -317,7 +247,6 @@ async def bulk_send_template(
             failed += 1
             errors.append({"name": lead.name, "error": str(e)})
 
-        # Delay para evitar rate limit do WhatsApp
         await asyncio.sleep(1)
 
     await db.commit()

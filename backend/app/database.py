@@ -5,10 +5,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://localhost:5432/cenat_whatsapp")
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://intercambio_user:senha@db:5432/intercambio_db")
 
-engine = create_async_engine(DATABASE_URL, echo=True)
-
+engine = create_async_engine(DATABASE_URL, echo=False)
 async_session = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 

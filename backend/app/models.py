@@ -113,7 +113,7 @@ class AIConfig(Base):
     channel_id = Column(Integer, ForeignKey("channels.id"), unique=True, nullable=False)
     is_enabled = Column(Boolean, default=False)
     system_prompt = Column(Text, nullable=True)
-    model = Column(String(50), default="gpt-5")
+    model = Column(String(50), default="gpt-4o")
     temperature = Column(String(10), default="0.7")
     max_tokens = Column(Integer, default=500)
     created_at = Column(DateTime, server_default=func.now())
@@ -155,42 +155,3 @@ class AIConversationSummary(Base):
 
     contact = relationship("Contact", backref="ai_summaries")
     channel = relationship("Channel", backref="ai_summaries")
-
-
-class CallLog(Base):
-    __tablename__ = "call_logs"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    call_sid = Column(String(100), unique=True, nullable=False, index=True)
-    from_number = Column(String(30), nullable=False)
-    to_number = Column(String(30), nullable=False)
-    direction = Column(String(20), nullable=False)
-    status = Column(String(30), default="initiated")
-    duration = Column(Integer, default=0)
-    recording_url = Column(Text, nullable=True)
-    recording_sid = Column(String(100), nullable=True)
-    drive_file_url = Column(Text, nullable=True)
-    local_recording_path = Column(String(500), nullable=True)
-    transcription = Column(Text, nullable=True)
-    transcription_insights = Column(Text, nullable=True)
-    transcription_status = Column(String(30), nullable=True)  # pending, processing, done, error
-    user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
-    user_name = Column(String(255), nullable=True)
-    contact_wa_id = Column(String(20), nullable=True)
-    contact_name = Column(String(255), nullable=True)
-    channel_id = Column(Integer, ForeignKey("channels.id"), nullable=True)
-    created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
-
-    user = relationship("User", backref="call_logs")
-    channel = relationship("Channel", backref="call_logs")
-
-class CourseAlias(Base):
-    __tablename__ = "course_aliases"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    alias = Column(String(150), unique=True, nullable=False, index=True)
-    full_name = Column(String(500), nullable=False)
-    short_name = Column(String(150), nullable=True)
-    is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, server_default=func.now())

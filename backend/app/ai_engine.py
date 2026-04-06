@@ -6,26 +6,26 @@ import os
 import json
 import numpy as np
 import tiktoken
+from datetime import datetime
 from openai import AsyncOpenAI
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from app.models import KnowledgeDocument, AIConfig, Message, AIConversationSummary
+from app.models import KnowledgeDocument, AIConfig, Message, AIConversationSummary, Contact, ExactLead
 
 client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 EMBEDDING_MODEL = "text-embedding-3-small"
-DEFAULT_SYSTEM_PROMPT = """Você é um atendente virtual do CENAT (Centro Educacional Novas Abordagens em Saúde Mental).
-Seu papel é atender leads interessados em cursos de pós-graduação.
+DEFAULT_SYSTEM_PROMPT = """Você é um atendente virtual da equipe de Intercâmbio.
+Seu papel é atender leads interessados em programas de intercâmbio.
 Seja cordial, profissional e objetivo. Use as informações da base de conhecimento para responder.
-Se não souber a resposta, diga que vai encaminhar para um atendente humano.
-Nunca invente informações sobre preços, datas ou grades curriculares.
+Se não souber a resposta, diga que vai encaminhar para um consultor humano.
+Nunca invente informações sobre preços, datas ou programas.
 Responda de forma natural, como uma conversa no WhatsApp (mensagens curtas, use emojis com moderação)."""
 
 
 # === Tokenização ===
 
-def count_tokens(text: str, model: str = "gpt-5") -> int:
-    """Conta tokens de um texto."""
+def count_tokens(text: str, model: str = "gpt-4o") -> int:
     try:
         enc = tiktoken.encoding_for_model(model)
         return len(enc.encode(text))
@@ -34,7 +34,6 @@ def count_tokens(text: str, model: str = "gpt-5") -> int:
 
 
 def split_into_chunks(text: str, title: str, max_tokens: int = 400) -> list[dict]:
-    """Divide texto em chunks menores para embedding."""
     enc = tiktoken.encoding_for_model("gpt-4o")
     paragraphs = [p.strip() for p in text.split("\n") if p.strip()]
 
@@ -73,7 +72,6 @@ def split_into_chunks(text: str, title: str, max_tokens: int = 400) -> list[dict
 # === Embeddings ===
 
 async def generate_embedding(text: str) -> list[float]:
-    """Gera embedding de um texto usando OpenAI."""
     response = await client.embeddings.create(
         model=EMBEDDING_MODEL,
         input=text,
@@ -82,7 +80,6 @@ async def generate_embedding(text: str) -> list[float]:
 
 
 def cosine_similarity(a: list[float], b: list[float]) -> float:
-    """Calcula similaridade de cosseno entre dois vetores."""
     a = np.array(a)
     b = np.array(b)
     return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
@@ -91,7 +88,6 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
 # === RAG: Busca por Similaridade ===
 
 async def search_knowledge(query: str, channel_id: int, db: AsyncSession, top_k: int = 3) -> list[dict]:
-    """Busca os chunks mais relevantes para a pergunta do lead."""
     query_embedding = await generate_embedding(query)
 
     result = await db.execute(
@@ -125,7 +121,6 @@ async def search_knowledge(query: str, channel_id: int, db: AsyncSession, top_k:
 # === Histórico de Conversa ===
 
 async def get_conversation_history(contact_wa_id: str, db: AsyncSession, limit: int = 10) -> list[dict]:
-    """Busca as últimas mensagens da conversa para contexto."""
     result = await db.execute(
         select(Message)
         .where(Message.contact_wa_id == contact_wa_id)
@@ -140,7 +135,6 @@ async def get_conversation_history(contact_wa_id: str, db: AsyncSession, limit: 
         role = "user" if msg.direction == "inbound" else "assistant"
         content = msg.content or ""
 
-        # Ignorar mensagens de mídia no contexto
         if content.startswith("media:"):
             content = "[mídia enviada]"
         if content.startswith("template:") or content.startswith("[Template]"):
@@ -159,7 +153,6 @@ async def generate_ai_response(
     channel_id: int,
     db: AsyncSession,
 ) -> str | None:
-    """Gera resposta do agente IA usando RAG + histórico."""
 
     # 1. Buscar config da IA para o canal
     result = await db.execute(
@@ -175,48 +168,18 @@ async def generate_ai_response(
     temperature = float(ai_config.temperature or "0.7")
     max_tokens = ai_config.max_tokens or 500
 
-    # 1.5 Buscar nome e curso do lead
-    from app.models import Contact, AIConversationSummary
+    # 2. Buscar nome do lead
     contact_result = await db.execute(
         select(Contact).where(Contact.wa_id == contact_wa_id)
     )
     contact = contact_result.scalar_one_or_none()
     lead_name = contact.name if contact and contact.name else ""
-    
-    # Buscar curso no card do kanban
-    card_result = await db.execute(
-        select(AIConversationSummary).where(
-            AIConversationSummary.contact_wa_id == contact_wa_id,
-            AIConversationSummary.channel_id == channel_id,
-        )
-    )
-    card = card_result.scalar_one_or_none()
-    lead_course = card.lead_course if card and card.lead_course else ""
-    
-    # Injetar dados do lead no prompt
+
     lead_info = ""
-    if lead_name or lead_course:
-        lead_info = "\n\nINFORMAÇÕES DO LEAD ATUAL:\n"
-        if lead_name:
-            lead_info += f"- Nome: {lead_name}\n"
-        if lead_course:
-            lead_info += f"- Curso de interesse: {lead_course}\n"
-    # 1.7 Buscar disponibilidade do calendário
-    calendar_info = ""
-    try:
-        from app.google_calendar import get_available_dates, get_available_slots, CALENDARS
-        cal_id = CALENDARS["victoria"]["calendar_id"]
-        dates = await get_available_dates(cal_id, days_ahead=3)
-        if dates:
-            calendar_info = "\n\nAGENDA DISPONÍVEL PARA LIGAÇÃO:\n"
-            for d in dates:
-                slots = await get_available_slots(cal_id, d["date"])
-                horarios = ", ".join([s["start"] for s in slots[:6]])
-                calendar_info += f"- {d['weekday']} {d['date']}: {horarios}\n"
-            calendar_info += "\nIMPORTANTE: Só ofereça horários que estão nesta lista. Se o lead pedir um horário que não está disponível, informe que não há vaga e sugira os horários livres.\n"
-    except Exception as e:
-        print(f"⚠️ Erro ao buscar calendário: {e}")
-    # 2. Buscar contexto do RAG
+    if lead_name:
+        lead_info = f"\n\nINFORMAÇÕES DO LEAD ATUAL:\n- Nome: {lead_name}\n"
+
+    # 3. Buscar contexto do RAG
     relevant_docs = await search_knowledge(user_message, channel_id, db)
     context = ""
     if relevant_docs:
@@ -225,49 +188,29 @@ async def generate_ai_response(
             context += f"\n[{doc['title']}] (relevância: {doc['score']:.2f})\n{doc['content']}\n"
         context += "---\n"
 
-    # 3. Buscar histórico da conversa
+    # 4. Buscar histórico da conversa
     history = await get_conversation_history(contact_wa_id, db, limit=10)
 
-    # 4. Montar mensagens para o GPT
+    # 5. Montar mensagens para o GPT
     messages = [
-        {"role": "system", "content": system_prompt + lead_info + calendar_info + context},
+        {"role": "system", "content": system_prompt + lead_info + context},
     ]
     messages.extend(history)
 
-    # Se a última mensagem do histórico já é a mensagem atual, não duplicar
     if not history or history[-1].get("content") != user_message:
         messages.append({"role": "user", "content": user_message})
 
-    # 5. Chamar OpenAI
+    # 6. Chamar OpenAI
     try:
         response = await client.chat.completions.create(
             model=model,
             messages=messages,
-
+            temperature=temperature,
             max_completion_tokens=max_tokens,
         )
         ai_response = response.choices[0].message.content
         if not ai_response:
-            messages.append({"role": "assistant", "content": ""})
-            messages.append({"role": "user", "content": "Por favor, continue o atendimento."})
-            retry = await client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=messages,
-                max_completion_tokens=max_tokens,
-            )
-            ai_response = retry.choices[0].message.content or "Desculpe, não consegui processar. Um momento que vou transferir para nossa consultora."
-        # Detectar agendamento e criar evento no Google Calendar
-        try:
-            from app.google_calendar import detect_and_create_event
-            await detect_and_create_event(
-                ai_response,
-                [],
-                lead_name or "Lead",
-                contact_wa_id,
-                lead_course or "Não informado",
-            )
-        except Exception as e:
-            print(f"⚠️ Erro ao criar evento: {e}")
+            return "Desculpe, não consegui processar. Um momento que vou transferir para um consultor."
         return ai_response
     except Exception as e:
         print(f"❌ Erro ao gerar resposta IA: {e}")
@@ -277,7 +220,6 @@ async def generate_ai_response(
 # === Resumo da Conversa ===
 
 async def generate_conversation_summary(contact_wa_id: str, db: AsyncSession) -> str | None:
-    """Gera um resumo da conversa para o Kanban."""
     history = await get_conversation_history(contact_wa_id, db, limit=30)
 
     if not history:
@@ -302,27 +244,17 @@ async def generate_conversation_summary(contact_wa_id: str, db: AsyncSession) ->
             temperature=0.3,
             max_tokens=200,
         )
-        ai_response = response.choices[0].message.content
-        if not ai_response:
-            messages.append({"role": "assistant", "content": ""})
-            messages.append({"role": "user", "content": "Por favor, continue o atendimento."})
-            retry = await client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=messages,
-                max_completion_tokens=max_tokens,
-            )
-            ai_response = retry.choices[0].message.content or "Desculpe, não consegui processar. Um momento que vou transferir para nossa consultora."
-        return ai_response
+        return response.choices[0].message.content
     except Exception as e:
         print(f"❌ Erro ao gerar resumo: {e}")
         return None
 
+
 # === Anotação na Exact Spotter ===
+
 async def save_annotation_to_exact(contact_wa_id: str, channel_id: int, db: AsyncSession):
-    """Gera resumo da conversa e salva na timeline da Exact Spotter."""
     from app.exact_spotter import add_timeline_comment
-    
-    # 1. Buscar exact_lead_id pelo phone
+
     result = await db.execute(
         select(ExactLead).where(ExactLead.phone1 == contact_wa_id)
     )
@@ -330,13 +262,11 @@ async def save_annotation_to_exact(contact_wa_id: str, channel_id: int, db: Asyn
     if not exact_lead:
         print(f"⚠️ Lead não encontrado na Exact para wa_id: {contact_wa_id}")
         return False
-    
-    # 2. Buscar histórico da conversa
+
     history = await get_conversation_history(contact_wa_id, db, limit=30)
     if not history:
         return False
-    
-    # 3. Buscar info do card kanban
+
     card_result = await db.execute(
         select(AIConversationSummary).where(
             AIConversationSummary.contact_wa_id == contact_wa_id,
@@ -344,43 +274,34 @@ async def save_annotation_to_exact(contact_wa_id: str, channel_id: int, db: Asyn
         )
     )
     card = card_result.scalar_one_or_none()
-    lead_course = card.lead_course if card else "Não informado"
-    
-    # 4. Gerar resumo com GPT
+
     conversation_text = "\n".join([f"{m['role']}: {m['content']}" for m in history])
-    
+
     try:
         response = await client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
-                {"role": "system", "content": """Gere um resumo objetivo do atendimento via WhatsApp feito pela IA Nat.
+                {"role": "system", "content": """Gere um resumo objetivo do atendimento via WhatsApp feito pela IA.
 Formato:
-📋 RESUMO DO ATENDIMENTO (IA Nat)
+📋 RESUMO DO ATENDIMENTO (IA)
 📅 Data: [data atual]
-🎓 Curso de interesse: [curso]
-👤 Graduação: [se informou]
-💼 Área de atuação: [se informou]
-📌 Expectativa: [se informou]
-�� Valor aceito: [sim/não/não chegou nessa etapa]
-�� Agendamento: [data/hora se marcou]
+📌 Interesse: [programa de interesse]
 📊 Status: [Qualificado/Não qualificado/Incompleto/Passou para humano]
 📝 Observações: [algo relevante]
 
 Seja breve e direto."""},
-                {"role": "user", "content": f"Curso de interesse: {lead_course}\n\nConversa:\n{conversation_text}"}
+                {"role": "user", "content": f"Conversa:\n{conversation_text}"}
             ],
             max_completion_tokens=500,
         )
         summary = response.choices[0].message.content
     except Exception as e:
-        summary = f"�� Atendimento realizado pela IA Nat em {datetime.now().strftime('%d/%m/%Y %H:%M')}. Erro ao gerar resumo: {e}"
-    
-    # 5. Enviar para timeline da Exact Spotter
+        summary = f"📋 Atendimento realizado pela IA em {datetime.now().strftime('%d/%m/%Y %H:%M')}. Erro ao gerar resumo: {e}"
+
     success = await add_timeline_comment(exact_lead.exact_id, summary)
-    
-    # 6. Salvar no Hub também (card kanban)
+
     if card and summary:
         card.summary = summary
         await db.commit()
-    
+
     return success

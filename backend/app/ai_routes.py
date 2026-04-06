@@ -39,23 +39,11 @@ async def get_ai_config(channel_id: int, db: AsyncSession = Depends(get_db)):
     config = result.scalar_one_or_none()
 
     if not config:
-        # Detectar agendamento e criar evento no Google Calendar
-        try:
-            from app.google_calendar import detect_and_create_event
-            await detect_and_create_event(
-                ai_response,
-                req.conversation_history,
-                req.lead_name or "Lead",
-                "teste",
-                req.lead_course or "Não informado",
-            )
-        except Exception as e:
-            print(f"⚠️ Erro ao criar evento: {e}")
         return {
             "channel_id": channel_id,
             "is_enabled": False,
             "system_prompt": "",
-            "model": "gpt-5",
+            "model": "gpt-4o",
             "temperature": "0.7",
             "max_tokens": 500,
         }
@@ -108,7 +96,6 @@ async def toggle_contact_ai(wa_id: str, req: ToggleAIRequest, db: AsyncSession =
 
     contact.ai_active = req.ai_active
 
-    # Se desligou a IA, atualizar o summary do kanban
     if not req.ai_active:
         summary_result = await db.execute(
             select(AIConversationSummary).where(
@@ -119,7 +106,6 @@ async def toggle_contact_ai(wa_id: str, req: ToggleAIRequest, db: AsyncSession =
         summary = summary_result.scalar_one_or_none()
         if summary:
             summary.status = "aguardando_humano"
-            # Salvar anotação na Exact Spotter
             from app.ai_engine import save_annotation_to_exact
             await save_annotation_to_exact(wa_id, summary.channel_id, db)
             summary.human_took_over = True
@@ -163,7 +149,6 @@ async def upload_document(
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
 ):
-    # Ler conteúdo do arquivo
     content_bytes = await file.read()
     try:
         content = content_bytes.decode("utf-8")
@@ -173,13 +158,11 @@ async def upload_document(
     if not content.strip():
         raise HTTPException(status_code=400, detail="Arquivo vazio")
 
-    # Dividir em chunks
     chunks = split_into_chunks(content, title)
 
     if not chunks:
         raise HTTPException(status_code=400, detail="Não foi possível processar o documento")
 
-    # Gerar embeddings e salvar cada chunk
     saved = 0
     for chunk in chunks:
         try:
@@ -225,12 +208,16 @@ async def delete_document(channel_id: int, title: str, db: AsyncSession = Depend
 
     await db.commit()
     return {"status": "deleted", "chunks_removed": len(docs)}
+
+
+# === Test Chat ===
+
 class TestChatRequest(BaseModel):
     message: str
-    channel_id: int = 2
+    channel_id: int = 1
     conversation_history: list = []
     lead_name: str = ""
-    lead_course: str = ""
+
 
 @router.post("/test-chat")
 async def test_chat(req: TestChatRequest, db: AsyncSession = Depends(get_db)):
@@ -241,18 +228,16 @@ async def test_chat(req: TestChatRequest, db: AsyncSession = Depends(get_db)):
 
     client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-    # Buscar config do canal
     result = await db.execute(
         select(AIConfig).where(AIConfig.channel_id == req.channel_id)
     )
     ai_config = result.scalar_one_or_none()
 
     system_prompt = ai_config.system_prompt if ai_config and ai_config.system_prompt else DEFAULT_SYSTEM_PROMPT
-    model = ai_config.model if ai_config else "gpt-5"
+    model = ai_config.model if ai_config else "gpt-4o"
     temperature = float(ai_config.temperature) if ai_config else 0.7
-    max_tokens = ai_config.max_tokens if ai_config else 1000
+    max_tokens = ai_config.max_tokens if ai_config else 500
 
-    # RAG
     relevant_docs = await search_knowledge(req.message, req.channel_id, db)
     context = ""
     if relevant_docs:
@@ -261,31 +246,11 @@ async def test_chat(req: TestChatRequest, db: AsyncSession = Depends(get_db)):
             context += f"\n[{doc['title']}] (relevância: {doc['score']:.2f})\n{doc['content']}\n"
         context += "---\n"
 
-    # Montar mensagens
     lead_info = ""
-    if req.lead_name or req.lead_course:
-        lead_info = "\n\nINFORMAÇÕES DO LEAD ATUAL:\n"
-        if req.lead_name:
-            lead_info += f"- Nome: {req.lead_name}\n"
-        if req.lead_course:
-            lead_info += f"- Curso de interesse: {req.lead_course}\n"
-    # Buscar disponibilidade do calendário
-    calendar_info = ""
-    try:
-        from app.google_calendar import get_available_dates, get_available_slots, CALENDARS
-        cal_id = CALENDARS["victoria"]["calendar_id"]
-        dates = await get_available_dates(cal_id, days_ahead=3)
-        if dates:
-            calendar_info = "\n\nAGENDA DISPONÍVEL PARA LIGAÇÃO:\n"
-            for d in dates:
-                slots = await get_available_slots(cal_id, d["date"])
-                horarios = ", ".join([s["start"] for s in slots[:6]])
-                calendar_info += f"- {d['weekday']} {d['date']}: {horarios}\n"
-            calendar_info += "\nIMPORTANTE: Só ofereça horários que estão nesta lista. Se o lead pedir um horário que não está disponível, informe que não há vaga e sugira os horários livres.\n"
-    except Exception as e:
-        print(f"⚠️ Erro ao buscar calendário: {e}")
-    print(f"📅 CALENDAR_INFO: {calendar_info[:200] if calendar_info else VAZIO}")
-    messages = [{"role": "system", "content": system_prompt + lead_info + calendar_info + context}]
+    if req.lead_name:
+        lead_info = f"\n\nINFORMAÇÕES DO LEAD ATUAL:\n- Nome: {req.lead_name}\n"
+
+    messages = [{"role": "system", "content": system_prompt + lead_info + context}]
     messages.extend(req.conversation_history)
     messages.append({"role": "user", "content": req.message})
 
@@ -293,32 +258,14 @@ async def test_chat(req: TestChatRequest, db: AsyncSession = Depends(get_db)):
         response = await client.chat.completions.create(
             model=model,
             messages=messages,
-
+            temperature=temperature,
             max_completion_tokens=max_tokens,
         )
-        
+
         ai_response = response.choices[0].message.content
         if not ai_response:
-            messages.append({"role": "assistant", "content": ""})
-            messages.append({"role": "user", "content": "Por favor, confirme o agendamento com a data e horário que informei."})
-            retry = await client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=messages,
-                max_completion_tokens=max_tokens,
-            )
-            ai_response = retry.choices[0].message.content or "Perfeito! Sua reunião está agendada. Lembrando que ao atender no horário agendado você estará elegível para isenção da taxa da matrícula. Abraço! 🌻"
-        # Detectar agendamento e criar evento no Google Calendar
-        try:
-            from app.google_calendar import detect_and_create_event
-            await detect_and_create_event(
-                ai_response,
-                req.conversation_history,
-                req.lead_name or "Lead",
-                "teste",
-                req.lead_course or "Não informado",
-            )
-        except Exception as e:
-            print(f"⚠️ Erro ao criar evento: {e}")
+            ai_response = "Desculpe, não consegui processar. Um momento que vou transferir para um consultor."
+
         return {
             "response": ai_response,
             "model": model,

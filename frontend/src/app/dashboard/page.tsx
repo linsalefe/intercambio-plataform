@@ -40,7 +40,7 @@ const statusColors: Record<string, { bg: string; text: string; bar: string; dot:
 };
 
 const statCards = [
-  { key: 'total_contacts', label: 'Total de contatos', icon: Users, iconBg: 'bg-blue-50', iconColor: 'text-blue-600' },
+  { key: 'total_contacts', label: 'Total de contatos', icon: Users, iconBg: 'bg-blue-50', iconColor: 'text-[#1D4ED8]' },
   { key: 'new_today', label: 'Novos hoje', icon: UserPlus, iconBg: 'bg-emerald-50', iconColor: 'text-emerald-600' },
   { key: 'inbound_today', label: 'Recebidas hoje', icon: ArrowDownLeft, iconBg: 'bg-purple-50', iconColor: 'text-purple-600' },
   { key: 'outbound_today', label: 'Enviadas hoje', icon: ArrowUpRight, iconBg: 'bg-amber-50', iconColor: 'text-amber-600' },
@@ -88,7 +88,7 @@ export default function DashboardPage() {
   if (authLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#f8f9fb]">
-        <Loader2 className="w-8 h-8 text-[#2A658F] animate-spin" />
+        <Loader2 className="w-8 h-8 text-[#1D4ED8] animate-spin" />
       </div>
     );
   }
@@ -124,7 +124,7 @@ export default function DashboardPage() {
         {/* ── Header ── */}
         <div className={`transition-all duration-700 ease-out ${mounted ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-4'}`}>
           <p className="text-sm text-gray-400 mb-0.5">{getGreeting()},</p>
-          <h1 className="text-2xl font-semibold text-[#27273D] tracking-tight">
+          <h1 className="text-2xl font-semibold text-[#0f172a] tracking-tight">
             {user.name.split(' ')[0]}
           </h1>
         </div>
@@ -137,14 +137,14 @@ export default function DashboardPage() {
             return (
               <div
                 key={card.key}
-                className="bg-white rounded-2xl p-5 border border-gray-100 hover:border-gray-200 hover:shadow-sm transition-all duration-200 group"
+                className="bg-white rounded-2xl p-5 border border-gray-100 hover:border-gray-200 hover:shadow-sm hover:-translate-y-0.5 transition-all duration-200 group"
               >
                 <div className="flex items-center justify-between mb-4">
                   <div className={`w-10 h-10 ${card.iconBg} rounded-xl flex items-center justify-center group-hover:scale-105 transition-transform duration-200`}>
                     <Icon className={`w-[18px] h-[18px] ${card.iconColor}`} />
                   </div>
                 </div>
-                <p className="text-2xl font-bold text-[#27273D] tabular-nums">{value}</p>
+                <p className="text-2xl font-bold text-[#0f172a] tabular-nums">{value}</p>
                 <p className="text-[13px] text-gray-400 mt-0.5">{card.label}</p>
               </div>
             );
@@ -158,13 +158,13 @@ export default function DashboardPage() {
           <div className="lg:col-span-2 bg-white rounded-2xl p-6 border border-gray-100">
             <div className="flex items-center justify-between mb-6">
               <div>
-                <h2 className="text-[15px] font-semibold text-[#27273D]">Mensagens na semana</h2>
+                <h2 className="text-[15px] font-semibold text-[#0f172a]">Mensagens na semana</h2>
                 <p className="text-sm text-gray-400 mt-0.5">
-                  <span className="font-semibold text-[#27273D]">{stats.messages_week}</span> nos últimos 7 dias
+                  <span className="font-semibold text-[#0f172a]">{stats.messages_week}</span> nos últimos 7 dias
                 </p>
               </div>
-              <div className="w-9 h-9 bg-[#2A658F]/8 rounded-lg flex items-center justify-center">
-                <TrendingUp className="w-4 h-4 text-[#2A658F]" />
+              <div className="w-9 h-9 bg-[#1D4ED8]/10 rounded-lg flex items-center justify-center">
+                <TrendingUp className="w-4 h-4 text-[#1D4ED8]" />
               </div>
             </div>
 
@@ -181,22 +181,20 @@ export default function DashboardPage() {
                     onMouseEnter={() => setHoveredBar(i)}
                     onMouseLeave={() => setHoveredBar(null)}
                   >
-                    {/* Tooltip valor */}
                     <span className={`text-xs font-semibold tabular-nums transition-all duration-200 ${
-                      isHovered ? 'text-[#2A658F]' : 'text-gray-400'
+                      isHovered ? 'text-[#1D4ED8]' : 'text-gray-400'
                     }`}>
                       {day.count}
                     </span>
 
-                    {/* Barra */}
                     <div className="w-full bg-gray-50 rounded-lg overflow-hidden relative" style={{ height: '130px' }}>
                       <div
                         className={`w-full rounded-lg transition-all duration-500 ease-out ${
                           isToday
-                            ? 'bg-[#2A658F]'
+                            ? 'bg-[#1D4ED8]'
                             : isHovered
-                              ? 'bg-[#2A658F]/70'
-                              : 'bg-[#2A658F]/25'
+                              ? 'bg-[#1D4ED8]/70'
+                              : 'bg-[#1D4ED8]/25'
                         }`}
                         style={{
                           height: `${Math.max(pct, day.count > 0 ? 6 : 2)}%`,
@@ -205,9 +203,8 @@ export default function DashboardPage() {
                       />
                     </div>
 
-                    {/* Label dia */}
                     <span className={`text-[11px] font-medium transition-colors duration-200 ${
-                      isToday ? 'text-[#2A658F]' : 'text-gray-400'
+                      isToday ? 'text-[#1D4ED8]' : 'text-gray-400'
                     }`}>
                       {day.day}
                     </span>
@@ -221,9 +218,9 @@ export default function DashboardPage() {
           <div className="bg-white rounded-2xl p-6 border border-gray-100">
             <div className="flex items-center justify-between mb-5">
               <div>
-                <h2 className="text-[15px] font-semibold text-[#27273D]">Funil de leads</h2>
+                <h2 className="text-[15px] font-semibold text-[#0f172a]">Funil de leads</h2>
                 <p className="text-sm text-gray-400 mt-0.5">
-                  <span className="font-semibold text-[#27273D]">{stats.total_contacts}</span> contatos
+                  <span className="font-semibold text-[#0f172a]">{stats.total_contacts}</span> contatos
                 </p>
               </div>
               <div className="w-9 h-9 bg-purple-50 rounded-lg flex items-center justify-center">
@@ -244,9 +241,7 @@ export default function DashboardPage() {
                         <span className="text-[13px] text-gray-600">{label}</span>
                       </div>
                       <div className="flex items-center gap-2">
-                        <span className="text-[11px] text-gray-400 tabular-nums">
-                          {pct.toFixed(0)}%
-                        </span>
+                        <span className="text-[11px] text-gray-400 tabular-nums">{pct.toFixed(0)}%</span>
                         <span className={`text-[11px] font-semibold px-1.5 py-0.5 rounded-md ${colors.bg} ${colors.text} tabular-nums`}>
                           {count}
                         </span>
@@ -268,14 +263,14 @@ export default function DashboardPage() {
         {/* ── Resumo rodapé ── */}
         <div className={`grid grid-cols-2 lg:grid-cols-4 gap-4 transition-all duration-700 ease-out delay-300 ${mounted ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4'}`}>
           {[
-            { label: 'Mensagens hoje', value: stats.messages_today, icon: MessageSquare, color: 'text-[#2A658F]', bg: 'bg-[#2A658F]/8' },
+            { label: 'Mensagens hoje', value: stats.messages_today, icon: MessageSquare, color: 'text-[#1D4ED8]', bg: 'bg-[#1D4ED8]/10' },
             { label: 'Convertidos', value: stats.status_counts['convertido'] || 0, icon: Users, color: 'text-emerald-600', bg: 'bg-emerald-50' },
             { label: 'Negociando', value: stats.status_counts['negociando'] || 0, icon: TrendingUp, color: 'text-amber-600', bg: 'bg-amber-50' },
             { label: 'Qualificados', value: stats.status_counts['qualificado'] || 0, icon: Activity, color: 'text-purple-600', bg: 'bg-purple-50' },
           ].map((item) => {
             const Icon = item.icon;
             return (
-              <div key={item.label} className="bg-white rounded-2xl p-4 border border-gray-100 flex items-center gap-4">
+              <div key={item.label} className="bg-white rounded-2xl p-4 border border-gray-100 flex items-center gap-4 hover:shadow-sm hover:-translate-y-0.5 transition-all duration-200">
                 <div className={`w-10 h-10 ${item.bg} rounded-xl flex items-center justify-center flex-shrink-0`}>
                   <Icon className={`w-[18px] h-[18px] ${item.color}`} />
                 </div>

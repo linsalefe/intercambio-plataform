@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from app.auth import get_current_user
-from app.models import Channel, Contact, Message, Tag, contact_tags, CourseAlias, User
+from app.models import Channel, Contact, Message, Tag, contact_tags, User
 
 SP_TZ = timezone(timedelta(hours=-3))
 
@@ -93,7 +93,6 @@ async def dashboard_stats(channel_id: Optional[int] = None, db: AsyncSession = D
     today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     week_start = today_start - timedelta(days=today_start.weekday())
 
-    # Filtro base por canal
     contact_filter = [] if not channel_id else [Contact.channel_id == channel_id]
     message_filter = [] if not channel_id else [Message.channel_id == channel_id]
 
@@ -220,7 +219,6 @@ async def send_template(req: SendTemplateRequest, db: AsyncSession = Depends(get
         elif req.contact_name and not contact.name:
             contact.name = req.contact_name
 
-        # Montar conteúdo legível
         content_text = f"template:{req.template_name}"
         if req.parameters:
             content_text = f"[Template] " + ", ".join(req.parameters)
@@ -246,7 +244,7 @@ async def send_media(
     file: UploadFile = File(...),
     to: str = Form(...),
     channel_id: int = Form(...),
-    type: str = Form(...),  # image, document, audio
+    type: str = Form(...),
     db: AsyncSession = Depends(get_db),
 ):
     channel = await get_channel(channel_id, db)
@@ -254,7 +252,6 @@ async def send_media(
     mime_type = file.content_type or "application/octet-stream"
     filename = file.filename or "file"
 
-    # Mapear tipo para media_type da Meta
     media_type_map = {
         "image": "image",
         "document": "document",
@@ -263,10 +260,8 @@ async def send_media(
     }
     media_type = media_type_map.get(type, "document")
 
-    # 1. Upload da mídia para Meta
     media_id = await upload_media(file_bytes, mime_type, filename, channel.phone_number_id, channel.whatsapp_token)
 
-    # 2. Enviar mensagem com mídia
     caption = filename if media_type == "document" else None
     result = await send_media_message(to, media_id, media_type, channel.phone_number_id, channel.whatsapp_token, caption)
 
@@ -280,7 +275,6 @@ async def send_media(
             db.add(contact)
             await db.flush()
 
-        # Salvar referência da mídia: media:{media_id}|{mime_type}|{filename}
         content = f"media:{media_id}|{mime_type}|{filename}"
 
         message = Message(
@@ -306,7 +300,6 @@ async def list_contacts(channel_id: Optional[int] = None, assigned_to: Optional[
     query = select(Contact).order_by(Contact.updated_at.desc())
     if channel_id:
         query = query.where(Contact.channel_id == channel_id)
-    # SDR só vê seus próprios contatos
     if current_user.role != "admin":
         query = query.where(Contact.assigned_to == current_user.id)
     elif assigned_to:
@@ -349,7 +342,6 @@ async def list_contacts(channel_id: Optional[int] = None, assigned_to: Optional[
             "assigned_to": c.assigned_to,
         })
 
-    # Ordenar pela última mensagem (mais recente primeiro)
     contacts_list.sort(key=lambda x: x["last_message_time"] or "", reverse=True)
 
     return contacts_list
@@ -420,7 +412,6 @@ async def remove_tag_from_contact(wa_id: str, tag_id: int, db: AsyncSession = De
 
 @router.post("/contacts/{wa_id}/read")
 async def mark_as_read(wa_id: str, db: AsyncSession = Depends(get_db)):
-    """Marca todas as mensagens inbound do contato como lidas."""
     from sqlalchemy import update
     await db.execute(
         update(Message).where(
@@ -488,6 +479,7 @@ async def delete_tag(tag_id: int, db: AsyncSession = Depends(get_db)):
 @router.get("/channels/{channel_id}/templates")
 async def list_templates(channel_id: int, db: AsyncSession = Depends(get_db)):
     import httpx
+    import re
     channel = await get_channel(channel_id, db)
     async with httpx.AsyncClient() as client:
         response = await client.get(
@@ -500,10 +492,10 @@ async def list_templates(channel_id: int, db: AsyncSession = Depends(get_db)):
     templates = []
     for t in data.get("data", []):
         params = []
+        body_text = ""
         for comp in t.get("components", []):
             if comp["type"] == "BODY":
                 text = comp.get("text", "")
-                import re
                 matches = re.findall(r'\{\{(\d+)\}\}', text)
                 params = [f"Variável {m}" for m in matches]
                 body_text = text
@@ -511,11 +503,9 @@ async def list_templates(channel_id: int, db: AsyncSession = Depends(get_db)):
             "name": t["name"],
             "language": t["language"],
             "status": t["status"],
-            "body": body_text if 'body_text' in dir() else "",
+            "body": body_text,
             "parameters": params,
         })
-        if 'body_text' in dir():
-            del body_text
 
     return templates
 
@@ -525,7 +515,6 @@ async def get_media(media_id: str, channel_id: int = 1, db: AsyncSession = Depen
     import httpx
     channel = await get_channel(channel_id, db)
 
-    # Passo 1: pegar URL da mídia
     async with httpx.AsyncClient() as client:
         url_response = await client.get(
             f"https://graph.facebook.com/v22.0/{media_id}",
@@ -537,7 +526,6 @@ async def get_media(media_id: str, channel_id: int = 1, db: AsyncSession = Depen
         if not media_url:
             raise HTTPException(status_code=404, detail="Mídia não encontrada")
 
-        # Passo 2: baixar mídia
         media_response = await client.get(
             media_url,
             headers={"Authorization": f"Bearer {channel.whatsapp_token}"},
@@ -549,54 +537,3 @@ async def get_media(media_id: str, channel_id: int = 1, db: AsyncSession = Depen
         media_type=url_data.get("mime_type", "application/octet-stream"),
         headers={"Cache-Control": "public, max-age=86400"},
     )
-
-
-# === Course Aliases (Mapeamento de cursos) ===
-
-@router.get("/course-aliases")
-async def list_course_aliases(db: AsyncSession = Depends(get_db)):
-    """Lista todos os mapeamentos de cursos."""
-    result = await db.execute(select(CourseAlias).where(CourseAlias.is_active == True).order_by(CourseAlias.short_name))
-    aliases = result.scalars().all()
-    return [
-        {
-            "id": a.id,
-            "alias": a.alias,
-            "full_name": a.full_name,
-            "short_name": a.short_name,
-            "is_active": a.is_active,
-        }
-        for a in aliases
-    ]
-
-
-@router.get("/course-aliases/resolve/{alias}")
-async def resolve_course_alias(alias: str, db: AsyncSession = Depends(get_db)):
-    """Resolve um alias para o nome completo do curso."""
-    result = await db.execute(
-        select(CourseAlias).where(
-            func.lower(CourseAlias.alias) == func.lower(alias),
-            CourseAlias.is_active == True,
-        )
-    )
-    course = result.scalar_one_or_none()
-    if not course:
-        return {"alias": alias, "full_name": alias, "short_name": alias, "found": False}
-    return {
-        "alias": course.alias,
-        "full_name": course.full_name,
-        "short_name": course.short_name,
-        "found": True,
-    }
-
-
-async def resolve_course_name(alias: str, db: AsyncSession) -> str:
-    """Helper interno: retorna short_name se existir, senão retorna o alias original."""
-    result = await db.execute(
-        select(CourseAlias).where(
-            func.lower(CourseAlias.alias) == func.lower(alias),
-            CourseAlias.is_active == True,
-        )
-    )
-    course = result.scalar_one_or_none()
-    return course.short_name if course else alias

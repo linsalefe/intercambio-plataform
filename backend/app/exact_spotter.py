@@ -11,11 +11,11 @@ BASE_URL = "https://api.exactspotter.com/v3"
 # Template que será enviado automaticamente para leads novos
 AUTO_TEMPLATE_NAME = "mensagens_de_boas_vindas"
 AUTO_TEMPLATE_LANG = "pt_BR"
-# ID do canal da IA (segundo número)
-AI_CHANNEL_ID = 2
+# ID do canal (configurar após criar o canal)
+AI_CHANNEL_ID = 1
 
-# ID do usuário para comentários na timeline (Victória Amorim)
-EXACT_BOT_USER_ID = 415875
+# ID do usuário para comentários na timeline
+EXACT_BOT_USER_ID = int(os.getenv("EXACT_BOT_USER_ID", "0"))
 
 
 async def add_timeline_comment(lead_id: int, text: str):
@@ -65,11 +65,11 @@ async def fetch_leads_from_exact(skip: int = 0, top: int = 500):
         return response.json()
 
 
-def is_pos_lead(lead: dict) -> bool:
-    """Verifica se o lead é de pós (subSource começa com 'pos')."""
+def is_intercambio_lead(lead: dict) -> bool:
+    """Verifica se o lead é de intercâmbio (subSource começa com 'intercambio')."""
     sub_source = lead.get("subSource")
     if sub_source and sub_source.get("value"):
-        return sub_source["value"].lower().startswith("pos")
+        return sub_source["value"].lower().startswith("intercambio")
     return False
 
 
@@ -93,21 +93,6 @@ def format_phone(phone: str) -> str:
     return digits
 
 
-def extract_course_name(sub_source: str) -> str:
-    """Extrai nome legível do curso a partir do subSource."""
-    if not sub_source:
-        return "Pós-Graduação"
-    # Remove prefixo "pos" e formata
-    name = sub_source
-    if name.lower().startswith("pos"):
-        name = name[3:]
-    # Capitaliza
-    name = name.replace("_", " ").replace("-", " ").strip()
-    if name:
-        return name
-    return "Pós-Graduação"
-
-
 async def send_welcome_to_new_lead(lead_data: dict, db: AsyncSession):
     """Envia template de boas-vindas e ativa a IA para um lead novo."""
     phone = format_phone(lead_data.get("phone1", ""))
@@ -116,13 +101,12 @@ async def send_welcome_to_new_lead(lead_data: dict, db: AsyncSession):
         return
 
     name = lead_data.get("name", "")
-    course = extract_course_name(lead_data.get("sub_source", ""))
 
-    # Buscar canal da IA
+    # Buscar canal
     result = await db.execute(select(Channel).where(Channel.id == AI_CHANNEL_ID))
     channel = result.scalar_one_or_none()
     if not channel:
-        print("❌ Canal da IA não encontrado")
+        print("❌ Canal não encontrado")
         return
 
     # Enviar template
@@ -133,7 +117,7 @@ async def send_welcome_to_new_lead(lead_data: dict, db: AsyncSession):
             language=AUTO_TEMPLATE_LANG,
             phone_number_id=channel.phone_number_id,
             token=channel.whatsapp_token,
-            parameters=[name, course],
+            parameters=[name],
         )
 
         if "messages" not in send_result:
@@ -168,7 +152,7 @@ async def send_welcome_to_new_lead(lead_data: dict, db: AsyncSession):
             channel_id=AI_CHANNEL_ID,
             direction="outbound",
             message_type="template",
-            content=f"[Template] {name}, {course}",
+            content=f"[Template] {name}",
             timestamp=datetime.now(SP_TZ).replace(tzinfo=None),
             status="sent",
         )
@@ -180,19 +164,18 @@ async def send_welcome_to_new_lead(lead_data: dict, db: AsyncSession):
             channel_id=AI_CHANNEL_ID,
             status="em_atendimento_ia",
             lead_name=name,
-            lead_course=course,
             ai_messages_count=0,
         )
         db.add(summary)
 
-        print(f"🤖 Template enviado para {name} ({phone}) - Curso: {course}")
+        print(f"🤖 Template enviado para {name} ({phone})")
 
     except Exception as e:
         print(f"❌ Erro ao enviar welcome para {name}: {e}")
 
 
 async def sync_exact_leads(db: AsyncSession):
-    """Sincroniza leads de pós do Exact Spotter com o banco local."""
+    """Sincroniza leads de intercâmbio do Exact Spotter com o banco local."""
     skip = 0
     top = 500
     total_synced = 0
@@ -208,7 +191,7 @@ async def sync_exact_leads(db: AsyncSession):
             break
 
         for lead in leads:
-            if not is_pos_lead(lead):
+            if not is_intercambio_lead(lead):
                 continue
 
             exact_id = lead["id"]
@@ -239,7 +222,6 @@ async def sync_exact_leads(db: AsyncSession):
                 new_lead = ExactLead(exact_id=exact_id, **lead_data)
                 db.add(new_lead)
                 total_new += 1
-                # Marcar para envio de boas-vindas
                 new_leads_to_contact.append(lead_data)
 
             total_synced += 1
