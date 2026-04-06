@@ -9,7 +9,7 @@ from app.whatsapp import send_template_message
 BASE_URL = "https://api.exactspotter.com/v3"
 
 # Template que será enviado automaticamente para leads novos
-AUTO_TEMPLATE_NAME = "mensagens_de_boas_vindas"
+AUTO_TEMPLATE_NAME = "mensagem_teste"
 AUTO_TEMPLATE_LANG = "pt_BR"
 # ID do canal (configurar após criar o canal)
 AI_CHANNEL_ID = 1
