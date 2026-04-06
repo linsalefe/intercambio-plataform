@@ -1,0 +1,5 @@
+.env
+backend/.env
+frontend/.env.local
+frontend/.next/
+backend/app/__pycache__/
