@@ -42,9 +42,10 @@ Sistema completo para gerenciamento de leads de intercâmbio com:
 ### Infraestrutura
 | Tecnologia | Função |
 |---|---|
-| Docker | Containerização |
-| Docker Compose | Orquestração local/produção |
-| PostgreSQL 16 Alpine | Banco de dados containerizado |
+| Docker + Docker Compose | Containerização e orquestração |
+| Nginx | Proxy reverso + SSL termination |
+| Certbot (Let's Encrypt) | Certificado HTTPS gratuito |
+| Contabo VPS | Servidor de produção (Ubuntu 24.04) |
 
 ---
 
@@ -71,8 +72,7 @@ intercambio-plataform/
 │   ├── setup.py                 # Script de setup inicial (user + canal)
 │   ├── requirements.txt
 │   ├── Dockerfile
-│   ├── .env                     # Variáveis de ambiente (NÃO commitar)
-│   └── .env.example
+│   └── .env                     # Variáveis de ambiente (NÃO commitar)
 ├── frontend/
 │   ├── src/
 │   │   ├── app/
@@ -95,6 +95,7 @@ intercambio-plataform/
 │   │       └── api.ts           # Axios configurado
 │   ├── public/
 │   ├── Dockerfile
+│   ├── .env.local               # NEXT_PUBLIC_API_URL (NÃO commitar)
 │   ├── package.json
 │   └── tsconfig.json
 ├── docker-compose.yml
@@ -104,7 +105,7 @@ intercambio-plataform/
 
 ---
 
-## 🚀 Setup Local
+## 🚀 Setup Local (Desenvolvimento)
 
 ### Pré-requisitos
 
@@ -114,13 +115,11 @@ intercambio-plataform/
 ### 1. Clonar o repositório
 
 ```bash
-git clone https://github.com/SEU_USUARIO/intercambio-plataform.git
+git clone git@github.com:linsalefe/intercambio-plataform.git
 cd intercambio-plataform
 ```
 
 ### 2. Configurar variáveis de ambiente
-
-Copie o exemplo e preencha com seus dados:
 
 ```bash
 cp backend/.env.example backend/.env
@@ -148,8 +147,6 @@ docker compose up --build
 
 ### 4. Criar as tabelas no banco
 
-Em outro terminal:
-
 ```bash
 docker compose exec backend python -m app.create_tables
 ```
@@ -168,6 +165,190 @@ docker compose exec backend python setup.py
 
 ---
 
+## 🌐 Deploy em Produção
+
+### Ambiente de produção atual
+
+| Item | Valor |
+|---|---|
+| Servidor | Contabo Cloud VPS 10 SSD |
+| IP | `38.242.215.167` |
+| OS | Ubuntu 24.04 |
+| Domínio | `intercambio.cenatdata.online` |
+| SSL | Let's Encrypt (auto-renova) |
+| Backend | Porta 8002 (interna 8000) |
+| Frontend | Porta 3001 (interna 3000) |
+| PostgreSQL | Porta 5443 (interna 5432) |
+
+### Passo a passo do deploy
+
+#### 1. Instalar dependências na VPS
+
+```bash
+apt update && apt install -y docker.io docker-compose-v2 nginx certbot python3-certbot-nginx
+systemctl enable docker && systemctl enable containerd
+```
+
+#### 2. Clonar e configurar
+
+```bash
+cd /root
+git clone git@github.com:linsalefe/intercambio-plataform.git intercambio
+```
+
+Criar `backend/.env` com as variáveis de produção e `frontend/.env.local`:
+
+```env
+NEXT_PUBLIC_API_URL=https://intercambio.cenatdata.online/api
+```
+
+#### 3. Subir containers
+
+```bash
+cd /root/intercambio
+docker compose up -d --build
+docker compose exec backend python -m app.create_tables
+```
+
+#### 4. Configurar Nginx
+
+Criar `/etc/nginx/sites-available/intercambio`:
+
+```nginx
+server {
+    listen 80;
+    server_name intercambio.cenatdata.online;
+
+    location / {
+        proxy_pass http://127.0.0.1:3001;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+
+    location /api/ {
+        proxy_pass http://127.0.0.1:8002;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+
+    location /webhook {
+        proxy_pass http://127.0.0.1:8002/webhook;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+
+    location /health {
+        proxy_pass http://127.0.0.1:8002/health;
+        proxy_set_header Host $host;
+    }
+}
+```
+
+```bash
+ln -sf /etc/nginx/sites-available/intercambio /etc/nginx/sites-enabled/
+nginx -t && systemctl reload nginx
+```
+
+#### 5. Gerar certificado SSL
+
+```bash
+certbot --nginx -d intercambio.cenatdata.online --non-interactive --agree-tos -m seu@email.com
+```
+
+#### 6. Verificar
+
+```bash
+curl https://intercambio.cenatdata.online/health
+# Esperado: {"status":"online"}
+```
+
+---
+
+## 📱 Webhook WhatsApp (Meta Cloud API)
+
+### Configuração
+
+Este projeto usa **override_callback_uri** no nível do WABA, permitindo que múltiplos projetos compartilhem o mesmo app Meta com WABAs diferentes.
+
+| Item | Valor |
+|---|---|
+| App Meta | API WPP CENAT (ID: 88462874541479) |
+| WABA | Cenat - Intercâmbio (ID: 820806221040124) |
+| Phone Number ID | 1043680765495660 |
+| Número | +55 11 95213 6429 |
+| Webhook URL | `https://intercambio.cenatdata.online/webhook` |
+| Verify Token | Definido em `WEBHOOK_VERIFY_TOKEN` no `.env` |
+
+### Como funciona o override
+
+Em vez de alterar o webhook global do app (que é usado por outro projeto), configuramos um `override_callback_uri` no WABA do intercâmbio:
+
+```bash
+curl -s -X POST "https://graph.facebook.com/v22.0/WABA_ID/subscribed_apps" \
+  -H "Authorization: Bearer TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"override_callback_uri":"https://intercambio.cenatdata.online/webhook","verify_token":"SEU_TOKEN"}'
+```
+
+Isso permite que cada WABA envie webhooks para servidores diferentes, mesmo usando o mesmo app.
+
+### Verificação do webhook
+
+```bash
+curl "https://intercambio.cenatdata.online/webhook?hub.mode=subscribe&hub.verify_token=SEU_TOKEN&hub.challenge=1234567890"
+# Esperado: 1234567890
+```
+
+### Tipos de mensagem processados
+
+O webhook processa automaticamente: `text`, `image`, `audio`, `video`, `document`, `sticker` e atualizações de status (`sent`, `delivered`, `read`).
+
+---
+
+## 🔄 Exact Sales — Sincronização
+
+| Item | Valor |
+|---|---|
+| API | Exact Spotter v3 |
+| Intervalo | A cada 10 minutos (automático) |
+| Filtro | `subSource` começando com `intercambio` |
+| Template auto | `mensagem_teste` (pt_BR) |
+| Total de leads | ~1301 (abril 2026) |
+
+### Fluxo automático
+
+1. O job roda a cada 10 minutos
+2. Busca leads da Exact Spotter com paginação
+3. Filtra apenas leads de intercâmbio (`subSource`)
+4. Leads **novos** recebem template de boas-vindas via WhatsApp
+5. Contato é criado no banco com IA ativada
+6. Card é criado no Kanban
+
+### Endpoint manual
+
+```bash
+POST /api/exact-leads/sync
+```
+
+---
+
+## 🤖 IA de Atendimento
+
+O agente de IA usa RAG (Retrieval Augmented Generation):
+
+1. **Base de conhecimento** — Upload de documentos `.txt`/`.md` que são divididos em chunks e vetorizados
+2. **Busca semântica** — Quando o lead pergunta algo, busca os chunks mais relevantes
+3. **Contexto** — Histórico da conversa + docs relevantes são enviados ao GPT
+4. **Configurável** — Prompt, modelo, temperatura e max_tokens por canal
+
+### Configuração via interface:
+1. Acesse **Config IA** no menu
+2. Ative a IA para o canal
+3. Escreva o prompt do sistema
+4. Faça upload dos documentos da base de conhecimento
+
+---
+
 ## 🔑 Credenciais Padrão
 
 | Campo | Valor |
@@ -180,11 +361,13 @@ docker compose exec backend python setup.py
 
 ## 🐳 Portas dos Containers
 
-| Serviço | Porta Externa | Porta Interna |
-|---|---|---|
-| Frontend (Next.js) | 3001 | 3000 |
-| Backend (FastAPI) | 8001 | 8000 |
-| PostgreSQL | 5443 | 5432 |
+| Serviço | Local | Produção | Interna |
+|---|---|---|---|
+| Frontend (Next.js) | 3001 | 3001 | 3000 |
+| Backend (FastAPI) | 8001 | 8002 | 8000 |
+| PostgreSQL | 5443 | 5443 | 5432 |
+
+> **Nota:** Em produção o backend usa porta 8002 porque a 8001 já é usada por outro projeto na mesma VPS.
 
 ---
 
@@ -271,44 +454,6 @@ docker compose exec backend python setup.py
 
 ---
 
-## ⚙️ Webhook WhatsApp (Meta)
-
-Para receber mensagens, configure o webhook no Meta Developer:
-
-1. Acesse [Meta for Developers](https://developers.facebook.com/)
-2. Vá em **WhatsApp > Configuração**
-3. Configure a URL do webhook: `https://SEU_DOMINIO/webhook`
-4. Token de verificação: mesmo valor de `WEBHOOK_VERIFY_TOKEN` no `.env`
-5. Assine os campos: `messages`, `message_deliveries`, `message_reads`
-
----
-
-## 🔄 Exact Sales — Sincronização
-
-- A sincronização roda **automaticamente a cada 10 minutos**
-- Filtra apenas leads com `subSource` começando com `intercambio`
-- Leads novos recebem template de boas-vindas e IA é ativada
-- Endpoint manual: `POST /api/exact-leads/sync`
-
----
-
-## 🤖 IA de Atendimento
-
-O agente de IA usa RAG (Retrieval Augmented Generation):
-
-1. **Base de conhecimento** — Upload de documentos `.txt`/`.md` que são divididos em chunks e vetorizados
-2. **Busca semântica** — Quando o lead pergunta algo, busca os chunks mais relevantes
-3. **Contexto** — Histórico da conversa + docs relevantes são enviados ao GPT
-4. **Configurável** — Prompt, modelo, temperatura e max_tokens por canal
-
-### Configuração via interface:
-1. Acesse **Config IA** no menu
-2. Ative a IA para o canal
-3. Escreva o prompt do sistema
-4. Faça upload dos documentos da base de conhecimento
-
----
-
 ## 🗃 Modelos do Banco
 
 | Tabela | Descrição |
@@ -341,6 +486,8 @@ Identidade visual baseada no **EduFlow Design System**:
 ## 📦 Comandos Úteis
 
 ```bash
+# === LOCAL ===
+
 # Subir containers
 docker compose up --build
 
@@ -370,6 +517,32 @@ docker compose exec backend python setup.py
 
 # Restart apenas o backend
 docker compose restart backend
+
+# === PRODUÇÃO (VPS) ===
+
+# Acessar VPS
+ssh root@38.242.215.167
+
+# Deploy de atualização
+cd /root/intercambio && git pull && docker compose up -d --build
+
+# Ver logs em produção
+cd /root/intercambio && docker compose logs -f backend
+
+# Restart em produção
+cd /root/intercambio && docker compose restart backend
+
+# Renovar certificado SSL (automático, mas manual se necessário)
+certbot renew
+
+# Testar webhook
+curl "https://intercambio.cenatdata.online/webhook?hub.mode=subscribe&hub.verify_token=SEU_TOKEN&hub.challenge=1234567890"
+
+# Verificar status dos containers
+cd /root/intercambio && docker compose ps
+
+# Forçar sync Exact Sales
+curl -X POST https://intercambio.cenatdata.online/api/exact-leads/sync -H "Authorization: Bearer SEU_JWT"
 ```
 
 ---
@@ -380,9 +553,14 @@ docker compose restart backend
 |---|---|
 | Porta já em uso | Mude as portas no `docker-compose.yml` |
 | Erro de senha no banco | Rode `docker compose down -v` e suba novamente |
-| Token WhatsApp expirado | Gere novo token no Meta e atualize no canal |
-| WSL needs updating (Windows) | Rode `wsl --update` como admin e reinicie |
+| Token WhatsApp expirado | Gere novo token no Meta Business Manager → Usuários do sistema → Gerar token |
+| Webhook não recebe mensagens | Verifique o override do WABA: `GET /v22.0/WABA_ID/subscribed_apps` |
+| 502 Bad Gateway | Verifique se os containers estão rodando: `docker compose ps` |
+| Frontend 502 após rebuild | Certifique-se que o Dockerfile do frontend faz `npm run build` antes de `npm run start` |
+| Template não encontrado | Liste os templates: `GET /v22.0/WABA_ID/message_templates` e confira nome/idioma |
 | Container não sobe | Rode `docker system prune -f` e rebuild |
+| WSL needs updating (Windows) | Rode `wsl --update` como admin e reinicie |
+| SSL expirado | Rode `certbot renew && systemctl reload nginx` |
 
 ---
 
