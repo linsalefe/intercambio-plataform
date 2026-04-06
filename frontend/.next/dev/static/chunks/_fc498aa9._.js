@@ -66,11 +66,11 @@ const menuItems = [
 function Sidebar() {
     _s();
     const $ = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$compiler$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["c"])(49);
-    if ($[0] !== "165c4a9a6d96cdf16630b2693690bacbf9d59d8a4dbb19a89f393187e205cad6") {
+    if ($[0] !== "44c7586e621650a0c6ee7d8435d2845fd0fea5666034db4bed97d69389ec6bdc") {
         for(let $i = 0; $i < 49; $i += 1){
             $[$i] = Symbol.for("react.memo_cache_sentinel");
         }
-        $[0] = "165c4a9a6d96cdf16630b2693690bacbf9d59d8a4dbb19a89f393187e205cad6";
+        $[0] = "44c7586e621650a0c6ee7d8435d2845fd0fea5666034db4bed97d69389ec6bdc";
     }
     const pathname = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$navigation$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["usePathname"])();
     const router = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$navigation$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useRouter"])();
@@ -572,11 +572,11 @@ var _s = __turbopack_context__.k.signature();
 function AppLayout(t0) {
     _s();
     const $ = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$compiler$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["c"])(11);
-    if ($[0] !== "363801c52976afc1078c08c759d813f3ee1ffd951cc3fb77c99134017b43aa2e") {
+    if ($[0] !== "e94cb3b14c006174b8311ac569b0b4e09cf0df75ba9a87c4bed533346730d4ed") {
         for(let $i = 0; $i < 11; $i += 1){
             $[$i] = Symbol.for("react.memo_cache_sentinel");
         }
-        $[0] = "363801c52976afc1078c08c759d813f3ee1ffd951cc3fb77c99134017b43aa2e";
+        $[0] = "e94cb3b14c006174b8311ac569b0b4e09cf0df75ba9a87c4bed533346730d4ed";
     }
     const { children, fullWidth: t1 } = t0;
     const fullWidth = t1 === undefined ? false : t1;
