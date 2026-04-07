@@ -231,9 +231,18 @@ async def process_lead_message(
     )
     flow = result.scalar_one_or_none()
 
-    # Se não tem fluxo ativo, deixa a IA responder normalmente
-    if not flow or not flow.is_active:
+    # Se não tem fluxo, responde sem contexto
+    if not flow:
         return {"action": "ai_respond", "state": "no_flow", "context": {}}
+
+    # Se fluxo existe mas está inativo, passa o contexto do programa
+    if not flow.is_active:
+        return {"action": "ai_respond", "state": "finished", "context": {
+            "flow_type": flow.flow_type,
+            "program_name": flow.program_name,
+            "program_language": flow.program_language,
+            "finished_reason": flow.finished_reason,
+        }}
 
     # Atualizar timestamp da última resposta
     flow.last_lead_response_at = datetime.now(SP_TZ).replace(tzinfo=None)
