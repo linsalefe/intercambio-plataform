@@ -301,8 +301,6 @@ async def process_lead_message(
             advance_state(flow, "scheduled")
             flow.is_active = False
             flow.finished_reason = "scheduled"
-            if contact:
-                contact.ai_active = False
             response["action"] = "schedule"
             response["state"] = "scheduled"
         else:
