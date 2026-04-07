@@ -162,6 +162,8 @@ async def receive_webhook(request: Request, db: AsyncSession = Depends(get_db)):
                 db.add(message)
                 await db.flush()
 
+                print(f"📩 MSG recebida: tipo={msg_type}, channel={channel_id}, content={content[:50] if content else 'vazio'}")
+
                 # === IA: processar apenas mensagens de texto com ai_active ===
                 if msg_type == "text" and channel_id and content:
                     try:
