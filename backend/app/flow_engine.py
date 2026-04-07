@@ -134,6 +134,7 @@ async def get_or_create_flow(
             program_name=program_name,
             program_language=program_language,
             current_state="welcome",
+            is_active=True,
         )
         db.add(flow)
         await db.flush()
