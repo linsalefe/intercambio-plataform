@@ -81,7 +81,28 @@ FLUENCY_MAP = {
     "basico": ["básico", "basico", "dificuldade", "3", "terceira"],
 }
 
-POSITIVE_TRIGGERS = ["sim", "quero", "pode ser", "bora", "vamos", "claro", "com certeza", "tenho", "disponível", "ok", "beleza"]
+POSITIVE_TRIGGERS = ["sim", "quero", "pode ser", "bora", "vamos", "claro", "com certeza", 
+                     "tenho", "disponível", "ok", "beleza", "pode", "topo", "fechado", "combinado"]
+
+SCHEDULE_TRIGGERS = ["segunda", "terça", "quarta", "quinta", "sexta", "sábado", 
+                     "amanhã", "depois de amanhã", "semana que vem",
+                     "8h", "9h", "10h", "11h", "12h", "13h", "14h", "15h", "16h", "17h", "18h",
+                     "manhã", "tarde", "noite"]
+
+GOODBYE_TRIGGERS = ["até", "tchau", "obrigado", "obrigada", "valeu", "falou", "se cuida", 
+                    "abraço", "abraços", "bom dia", "boa noite", "boa tarde"]
+
+
+def detect_schedule_confirmation(message: str) -> bool:
+    """Detecta se o lead está confirmando um horário para agendamento."""
+    msg = message.lower().strip()
+    return any(trigger in msg for trigger in SCHEDULE_TRIGGERS)
+
+
+def detect_goodbye(message: str) -> bool:
+    """Detecta se o lead está se despedindo."""
+    msg = message.lower().strip()
+    return any(trigger in msg for trigger in GOODBYE_TRIGGERS)
 
 
 def detect_ok(message: str) -> bool:
@@ -276,8 +297,12 @@ async def process_lead_message(
             response["action"] = "ai_respond"
 
     elif state == "scheduling":
-        if detect_positive(message):
+        if detect_positive(message) or detect_schedule_confirmation(message):
             advance_state(flow, "scheduled")
+            flow.is_active = False
+            flow.finished_reason = "scheduled"
+            if contact:
+                contact.ai_active = False
             response["action"] = "schedule"
             response["state"] = "scheduled"
         else:
