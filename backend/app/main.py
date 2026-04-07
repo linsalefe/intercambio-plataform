@@ -10,6 +10,9 @@ import asyncio
 
 from app.database import get_db, async_session
 from app.models import Channel, Contact, Message
+from app.flow_engine import process_lead_message
+from app.ai_engine import generate_ai_response
+from app.whatsapp import send_text_message
 from app.routes import router
 from app.auth_routes import router as auth_router
 from app.exact_routes import router as exact_router
@@ -115,7 +118,7 @@ async def receive_webhook(request: Request, db: AsyncSession = Depends(get_db)):
                     if not contact.channel_id and channel_id:
                         contact.channel_id = channel_id
 
-            # Salvar mensagens
+            # Salvar mensagens e processar IA
             for msg in value.get("messages", []):
                 wa_message_id = msg["id"]
 
@@ -144,9 +147,11 @@ async def receive_webhook(request: Request, db: AsyncSession = Depends(get_db)):
                     media = msg.get("sticker", {})
                     content = f'media:{media.get("id", "")}|{media.get("mime_type", "image/webp")}|'
 
+                contact_wa_id = msg["from"]
+
                 message = Message(
                     wa_message_id=wa_message_id,
-                    contact_wa_id=msg["from"],
+                    contact_wa_id=contact_wa_id,
                     channel_id=channel_id,
                     direction="inbound",
                     message_type=msg_type,
@@ -155,6 +160,68 @@ async def receive_webhook(request: Request, db: AsyncSession = Depends(get_db)):
                     status="received",
                 )
                 db.add(message)
+                await db.flush()
+
+                # === IA: processar apenas mensagens de texto com ai_active ===
+                if msg_type == "text" and channel_id and content:
+                    try:
+                        # Verificar se o contato tem IA ativa
+                        contact_result = await db.execute(
+                            select(Contact).where(Contact.wa_id == contact_wa_id)
+                        )
+                        contact_obj = contact_result.scalar_one_or_none()
+
+                        if contact_obj and contact_obj.ai_active:
+                            # Processar pelo flow engine
+                            flow_result = await process_lead_message(
+                                contact_wa_id=contact_wa_id,
+                                message=content,
+                                channel_id=channel_id,
+                                db=db,
+                            )
+
+                            # Gerar resposta da IA
+                            ai_response = await generate_ai_response(
+                                contact_wa_id=contact_wa_id,
+                                user_message=content,
+                                channel_id=channel_id,
+                                db=db,
+                                flow_context=flow_result,
+                            )
+
+                            if ai_response:
+                                # Buscar canal para enviar
+                                ch_result = await db.execute(
+                                    select(Channel).where(Channel.id == channel_id)
+                                )
+                                ch = ch_result.scalar_one_or_none()
+
+                                if ch:
+                                    # Enviar via WhatsApp
+                                    send_result = await send_text_message(
+                                        contact_wa_id, ai_response,
+                                        ch.phone_number_id, ch.whatsapp_token,
+                                    )
+
+                                    # Salvar mensagem da IA no banco
+                                    if "messages" in send_result:
+                                        ai_msg = Message(
+                                            wa_message_id=send_result["messages"][0]["id"],
+                                            contact_wa_id=contact_wa_id,
+                                            channel_id=channel_id,
+                                            direction="outbound",
+                                            message_type="text",
+                                            content=ai_response,
+                                            timestamp=datetime.now(SP_TZ).replace(tzinfo=None),
+                                            status="sent",
+                                            sent_by_ai=True,
+                                        )
+                                        db.add(ai_msg)
+
+                                    print(f"🤖 IA respondeu para {contact_wa_id} [estado: {flow_result['state']}]")
+
+                    except Exception as e:
+                        print(f"❌ Erro no processamento IA: {e}")
 
             # Atualizar status de mensagens enviadas
             for status_update in value.get("statuses", []):

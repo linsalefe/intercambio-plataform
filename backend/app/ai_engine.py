@@ -145,13 +145,80 @@ async def get_conversation_history(contact_wa_id: str, db: AsyncSession, limit: 
     return history
 
 
-# === Geração de Resposta ===
+# === Prompts por Estado do Fluxo ===
+
+STATE_PROMPTS = {
+    "no_flow": """Você é a NAT, assistente virtual do CENAT.
+O lead ainda não está em nenhum fluxo de intercâmbio.
+Responda de forma cordial e tente entender o interesse dele.
+Se ele perguntar sobre programas, explique brevemente e oriente a ouvir o áudio que será enviado.""",
+
+    "waiting_ok": """Você é a NAT, assistente virtual do CENAT.
+Você acabou de enviar um áudio sobre o programa {program_name} para o lead.
+Seu objetivo é que ele ouça o áudio e responda "ok".
+Se ele fizer perguntas, responda brevemente mas sempre relembre que o áudio tem as informações completas.
+NÃO repita o conteúdo do áudio. Seja breve e natural.
+Exemplo: "Entendo sua dúvida! No áudio explico direitinho sobre isso 😊 Consegue ouvir rapidinho?"
+""",
+
+    "qualifying_language": """Você é a NAT, assistente virtual do CENAT.
+O lead confirmou interesse no programa {program_name} (intercâmbio internacional).
+Agora você precisa descobrir o nível de fluência dele no idioma {program_language}.
+Faça isso de forma NATURAL e conversacional, não como um formulário.
+Explique que as atividades são conduzidas por profissionais locais sem tradutor.
+Apresente as 3 opções de forma amigável:
+1️⃣ Fluente — compreendo e consigo me comunicar bem
+2️⃣ Intermediário — compreendo e consigo manter conversas com certa facilidade  
+3️⃣ Básico — entendo algumas expressões, mas tenho dificuldade para me comunicar
+""",
+
+    "scheduling": """Você é a NAT, assistente virtual do CENAT.
+O lead está qualificado para o programa {program_name}.
+Seu objetivo agora é agendar uma conversa breve com a consultora por ligação.
+Proponha um horário nos próximos 2 dias úteis em horário comercial (9h-18h).
+Seja natural: "Que ótimo! O próximo passo é uma conversa rápida com nossa consultora. Ela vai te explicar tudo sobre valores e condições. Você teria disponibilidade amanhã ou depois de amanhã? Qual horário fica melhor pra você?"
+NÃO invente valores ou condições do programa.
+""",
+
+    "scheduled": """Você é a NAT, assistente virtual do CENAT.
+O lead tem um agendamento confirmado para {scheduled_date} com a consultora.
+Se ele tiver dúvidas, responda com base na base de conhecimento.
+Se perguntar sobre valores, diga que a consultora vai explicar tudo na conversa agendada.
+Confirme a data e horário se ele perguntar.
+""",
+
+    "meeting_day": """Você é a NAT, assistente virtual do CENAT.
+Hoje é o dia da conversa agendada do lead com a consultora.
+Confirme o horário e transmita confiança.
+""",
+
+    "post_meeting": """Você é a NAT, assistente virtual do CENAT.
+O lead já teve a conversa com a consultora.
+Agradeça pela participação e informe que as próximas orientações virão da consultora.
+""",
+
+    "disqualified": """Você é a NAT, assistente virtual do CENAT.
+O lead não foi qualificado para o programa {program_name} por conta do nível de idioma.
+Agradeça o interesse com empatia e apresente outros programas nacionais disponíveis.
+Link: https://cenatsaudemental.com/cenat-intercambios
+Seja gentil e não faça o lead se sentir rejeitado.
+""",
+
+    "discarded": """Você é a NAT, assistente virtual do CENAT.
+O lead não respondeu aos follow-ups e foi descartado.
+Se ele voltar a falar, seja cordial e verifique se ainda tem interesse.
+""",
+}
+
+
+# === Geração de Resposta (atualizada com flow_context) ===
 
 async def generate_ai_response(
     contact_wa_id: str,
     user_message: str,
     channel_id: int,
     db: AsyncSession,
+    flow_context: dict = None,
 ) -> str | None:
 
     # 1. Buscar config da IA para o canal
@@ -163,44 +230,72 @@ async def generate_ai_response(
     if not ai_config or not ai_config.is_enabled:
         return None
 
-    system_prompt = ai_config.system_prompt or DEFAULT_SYSTEM_PROMPT
     model = ai_config.model or "gpt-4o"
     temperature = float(ai_config.temperature or "0.7")
     max_tokens = ai_config.max_tokens or 500
 
-    # 2. Buscar nome do lead
-    contact_result = await db.execute(
-        select(Contact).where(Contact.wa_id == contact_wa_id)
+    # 2. Montar system prompt baseado no estado do fluxo
+    flow_state = "no_flow"
+    context_data = {}
+
+    if flow_context:
+        flow_state = flow_context.get("state", "no_flow")
+        context_data = flow_context.get("context", {})
+
+    state_prompt = STATE_PROMPTS.get(flow_state, STATE_PROMPTS["no_flow"])
+
+    # Substituir variáveis no prompt
+    state_prompt = state_prompt.format(
+        program_name=context_data.get("program_name") or "Intercâmbio",
+        program_language=context_data.get("program_language") or "inglês",
+        scheduled_date=context_data.get("scheduled_date") or "data a definir",
     )
-    contact = contact_result.scalar_one_or_none()
-    lead_name = contact.name if contact and contact.name else ""
 
-    lead_info = ""
+    # 3. Prompt base de comportamento
+    base_prompt = """REGRAS DE COMPORTAMENTO:
+- Você é a NAT, assistente virtual do CENAT (Centro Nacional de Saúde Mental)
+- Fale como uma pessoa real no WhatsApp: mensagens curtas, tom amigável e acolhedor
+- Use o nome do lead sempre que possível
+- Use emojis com moderação (1-2 por mensagem no máximo)
+- NUNCA invente informações sobre preços, datas ou detalhes do programa
+- Se não souber algo, diga que a consultora vai explicar na conversa agendada
+- Não mande mensagens longas. Máximo 3-4 linhas por mensagem
+- Responda de forma natural, como se fosse uma conversa entre amigos profissionais
+"""
+
+    lead_name = context_data.get("lead_name") or ""
     if lead_name:
-        lead_info = f"\n\nINFORMAÇÕES DO LEAD ATUAL:\n- Nome: {lead_name}\n"
+        base_prompt += f"\nO nome do lead é: {lead_name}. Use o nome dele naturalmente.\n"
 
-    # 3. Buscar contexto do RAG
+    # 4. Buscar contexto do RAG
     relevant_docs = await search_knowledge(user_message, channel_id, db)
-    context = ""
+    rag_context = ""
     if relevant_docs:
-        context = "\n\n---\nINFORMAÇÕES DA BASE DE CONHECIMENTO:\n"
+        rag_context = "\n\n---\nINFORMAÇÕES DA BASE DE CONHECIMENTO:\n"
         for doc in relevant_docs:
-            context += f"\n[{doc['title']}] (relevância: {doc['score']:.2f})\n{doc['content']}\n"
-        context += "---\n"
+            rag_context += f"\n[{doc['title']}] (relevância: {doc['score']:.2f})\n{doc['content']}\n"
+        rag_context += "---\n"
 
-    # 4. Buscar histórico da conversa
+    # 5. System prompt final
+    system_prompt = base_prompt + "\n" + state_prompt + rag_context
+
+    # Se o canal tem prompt customizado, adiciona como contexto extra
+    if ai_config.system_prompt:
+        system_prompt += f"\n\nCONTEXTO ADICIONAL DO CANAL:\n{ai_config.system_prompt}\n"
+
+    # 6. Buscar histórico da conversa
     history = await get_conversation_history(contact_wa_id, db, limit=10)
 
-    # 5. Montar mensagens para o GPT
+    # 7. Montar mensagens para o GPT
     messages = [
-        {"role": "system", "content": system_prompt + lead_info + context},
+        {"role": "system", "content": system_prompt},
     ]
     messages.extend(history)
 
     if not history or history[-1].get("content") != user_message:
         messages.append({"role": "user", "content": user_message})
 
-    # 6. Chamar OpenAI
+    # 8. Chamar OpenAI
     try:
         response = await client.chat.completions.create(
             model=model,
@@ -210,7 +305,7 @@ async def generate_ai_response(
         )
         ai_response = response.choices[0].message.content
         if not ai_response:
-            return "Desculpe, não consegui processar. Um momento que vou transferir para um consultor."
+            return "Desculpe, não consegui processar. Um momento que vou transferir para um consultor 😊"
         return ai_response
     except Exception as e:
         print(f"❌ Erro ao gerar resposta IA: {e}")
