@@ -14,6 +14,65 @@ AUTO_TEMPLATE_LANG = "pt_BR"
 # ID do canal (configurar após criar o canal)
 AI_CHANNEL_ID = 1
 
+# Mapeamento de programas por sub_source
+PROGRAM_MAP = {
+    "intercambiomanchester": {
+        "name": "Visita de Estudos em Saúde Mental - Manchester",
+        "flow_type": "internacional",
+        "language": "inglês",
+    },
+    "intercambiobuenosaires": {
+        "name": "Visita de Estudos em Saúde Mental - Buenos Aires",
+        "flow_type": "internacional",
+        "language": "espanhol",
+    },
+    "intercambioportugal": {
+        "name": "Visita de Estudos em Saúde Mental - Portugal",
+        "flow_type": "internacional",
+        "language": "português",
+    },
+    "intercambiodinamarca": {
+        "name": "Visita de Estudos em Saúde Mental - Dinamarca",
+        "flow_type": "internacional",
+        "language": "inglês",
+    },
+    # Nacionais
+    "intercambiosp": {
+        "name": "Intercâmbio São Paulo",
+        "flow_type": "nacional",
+        "language": None,
+    },
+    "intercambiorio": {
+        "name": "Intercâmbio Rio de Janeiro",
+        "flow_type": "nacional",
+        "language": None,
+    },
+    "intercambiobelem": {
+        "name": "Intercâmbio Belém",
+        "flow_type": "nacional",
+        "language": None,
+    },
+    "intercambioportoalegre": {
+        "name": "Intercâmbio Porto Alegre",
+        "flow_type": "nacional",
+        "language": None,
+    },
+}
+
+
+def get_program_from_subsource(sub_source: str) -> dict:
+    """Identifica o programa com base no sub_source do Exact."""
+    if not sub_source:
+        return {"name": "Intercâmbio CENAT", "flow_type": "nacional", "language": None}
+
+    clean = sub_source.lower().rstrip("0123456789")  # remove ano (2025, 2026)
+
+    for key, program in PROGRAM_MAP.items():
+        if clean == key:
+            return program
+
+    return {"name": sub_source, "flow_type": "nacional", "language": None}
+
 # ID do usuário para comentários na timeline
 EXACT_BOT_USER_ID = int(os.getenv("EXACT_BOT_USER_ID", "0"))
 
@@ -167,6 +226,18 @@ async def send_welcome_to_new_lead(lead_data: dict, db: AsyncSession):
             ai_messages_count=0,
         )
         db.add(summary)
+
+        # Criar estado do fluxo
+        from app.flow_engine import get_or_create_flow
+        program = get_program_from_subsource(lead_data.get("sub_source", ""))
+        await get_or_create_flow(
+            contact_wa_id=phone,
+            channel_id=AI_CHANNEL_ID,
+            flow_type=program["flow_type"],
+            program_name=program["name"],
+            db=db,
+            program_language=program["language"],
+        )
 
         print(f"🤖 Template enviado para {name} ({phone})")
 
