@@ -155,3 +155,65 @@ class AIConversationSummary(Base):
 
     contact = relationship("Contact", backref="ai_summaries")
     channel = relationship("Channel", backref="ai_summaries")
+
+class LeadFlowState(Base):
+    __tablename__ = "lead_flow_states"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    contact_wa_id = Column(String(20), ForeignKey("contacts.wa_id"), unique=True, nullable=False, index=True)
+    channel_id = Column(Integer, ForeignKey("channels.id"), nullable=False)
+
+    # Tipo do fluxo e estado atual
+    flow_type = Column(String(20), nullable=False, default="nacional")  # nacional | internacional
+    current_state = Column(String(50), nullable=False, default="welcome")
+    previous_state = Column(String(50), nullable=True)
+
+    # Dados do programa
+    program_name = Column(String(255), nullable=True)
+    program_language = Column(String(50), nullable=True)  # idioma do intercâmbio internacional
+
+    # Qualificação (internacional)
+    language_fluency = Column(String(30), nullable=True)  # fluente | intermediario | basico
+    qualified = Column(Boolean, nullable=True)  # None = não avaliado, True/False
+
+    # Agendamento
+    scheduled_date = Column(DateTime, nullable=True)
+    consultant_name = Column(String(255), nullable=True)
+    calendar_event_id = Column(String(255), nullable=True)  # ID do Google Calendar
+
+    # Controle de follow-ups
+    follow_up_stage = Column(Integer, default=0)
+    last_follow_up_at = Column(DateTime, nullable=True)
+    last_lead_response_at = Column(DateTime, nullable=True)
+
+    # Controle geral
+    is_active = Column(Boolean, default=True)
+    finished_reason = Column(String(50), nullable=True)  # scheduled | disqualified | discarded | completed
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    contact = relationship("Contact", backref="flow_state")
+    channel = relationship("Channel", backref="flow_states")
+
+class ScheduledMessage(Base):
+    __tablename__ = "scheduled_messages"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    contact_wa_id = Column(String(20), ForeignKey("contacts.wa_id"), nullable=False, index=True)
+    channel_id = Column(Integer, ForeignKey("channels.id"), nullable=False)
+
+    # Conteúdo
+    message_type = Column(String(30), nullable=False)  # follow_up_ok | follow_up_schedule | meeting_reminder | meeting_day
+    message_content = Column(Text, nullable=True)  # None = IA gera na hora do envio
+
+    # Agendamento
+    scheduled_for = Column(DateTime, nullable=False, index=True)
+    sent_at = Column(DateTime, nullable=True)
+    status = Column(String(20), default="pending")  # pending | sent | cancelled
+
+    # Controle
+    follow_up_stage = Column(Integer, default=0)
+    created_at = Column(DateTime, server_default=func.now())
+
+    contact = relationship("Contact", backref="scheduled_messages")
+    channel = relationship("Channel", backref="scheduled_messages")
