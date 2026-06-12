@@ -30,12 +30,17 @@ class SendTemplateRequest(BaseModel):
     channel_id: int = 1
     parameters: list = []
     contact_name: str = ""
+    rendered_text: str = ""
 
 
 class UpdateContactRequest(BaseModel):
     name: Optional[str] = None
     lead_status: Optional[str] = None
     notes: Optional[str] = None
+
+
+class AssignContactRequest(BaseModel):
+    assigned_to: Optional[int] = None
 
 
 class TagRequest(BaseModel):
@@ -219,9 +224,12 @@ async def send_template(req: SendTemplateRequest, db: AsyncSession = Depends(get
         elif req.contact_name and not contact.name:
             contact.name = req.contact_name
 
-        content_text = f"template:{req.template_name}"
-        if req.parameters:
-            content_text = f"[Template] " + ", ".join(req.parameters)
+        if req.rendered_text and req.rendered_text.strip():
+            content_text = req.rendered_text
+        elif req.parameters:
+            content_text = "[Template] " + ", ".join(req.parameters)
+        else:
+            content_text = f"template:{req.template_name}"
 
         message = Message(
             wa_message_id=result["messages"][0]["id"],
@@ -390,6 +398,21 @@ async def update_contact(wa_id: str, req: UpdateContactRequest, db: AsyncSession
 
     await db.commit()
     return {"status": "updated"}
+
+
+@router.patch("/contacts/{wa_id}/assign")
+async def assign_contact(wa_id: str, req: AssignContactRequest, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
+    result = await db.execute(select(Contact).where(Contact.wa_id == wa_id))
+    contact = result.scalar_one_or_none()
+    if not contact:
+        raise HTTPException(status_code=404, detail="Contato não encontrado")
+    if req.assigned_to is not None:
+        user_result = await db.execute(select(User).where(User.id == req.assigned_to, User.is_active == True))
+        if not user_result.scalar_one_or_none():
+            raise HTTPException(status_code=404, detail="Usuário (SDR) não encontrado")
+    contact.assigned_to = req.assigned_to
+    await db.commit()
+    return {"status": "assigned", "assigned_to": req.assigned_to}
 
 
 @router.post("/contacts/{wa_id}/tags/{tag_id}")
