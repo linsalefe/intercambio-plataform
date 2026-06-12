@@ -39,10 +39,16 @@ async def sync_job():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    task = asyncio.create_task(sync_job())
-    print("✅ Sync Exact Sales agendado (a cada 10 min)")
+    sync_enabled = os.getenv("EXACT_SYNC_ENABLED", "false").lower() == "true"
+    task = None
+    if sync_enabled:
+        task = asyncio.create_task(sync_job())
+        print("✅ Sync Exact Sales agendado (a cada 10 min)")
+    else:
+        print("⏸️ Sync Exact Sales DESATIVADO (defina EXACT_SYNC_ENABLED=true para ativar)")
     yield
-    task.cancel()
+    if task:
+        task.cancel()
 
 
 app = FastAPI(title="Intercâmbio Platform API", lifespan=lifespan)

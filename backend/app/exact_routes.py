@@ -188,6 +188,15 @@ async def bulk_send_template(
 
         phone = phone.replace("+", "").replace(" ", "").replace("-", "")
 
+        # Guard de segurança: pular números obviamente inválidos / de teste sem enviar.
+        # (incidente: 5599999999999 = assinante todo igual; 5539393334377114 = 16 dígitos)
+        digits = "".join(c for c in phone if c.isdigit())
+        subscriber = digits[4:]  # remove DDI (55) + DDD
+        if (not digits) or len(digits) < 12 or len(digits) > 13 or (subscriber and len(set(subscriber)) == 1):
+            failed += 1
+            errors.append({"name": lead.name, "error": "numero invalido"})
+            continue
+
         # Resolver parâmetros
         lead_params = None
         if param_mappings and len(param_mappings) > 0:
