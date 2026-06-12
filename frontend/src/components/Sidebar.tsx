@@ -15,12 +15,14 @@ import {
   Bot,
   Columns3,
   GraduationCap,
+  Zap,
 } from 'lucide-react';
 
 const menuItems = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { href: '/conversations', label: 'Conversas', icon: MessageCircle },
   { href: '/leads-pos', label: 'Leads', icon: GraduationCap },
+  { href: '/automacoes', label: 'Automações', icon: Zap },
   { href: '/kanban', label: 'Kanban IA', icon: Columns3 },
   { href: '/ai-config', label: 'Config IA', icon: Bot },
   { href: '/users', label: 'Usuários', icon: Users },
