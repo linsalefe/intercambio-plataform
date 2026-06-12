@@ -3,3 +3,4 @@ backend/.env
 frontend/.env.local
 frontend/.next/
 backend/app/__pycache__/
+backend/.env

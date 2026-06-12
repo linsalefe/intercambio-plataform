@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, update
 from pydantic import BaseModel
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -537,3 +537,52 @@ async def get_media(media_id: str, channel_id: int = 1, db: AsyncSession = Depen
         media_type=url_data.get("mime_type", "application/octet-stream"),
         headers={"Cache-Control": "public, max-age=86400"},
     )
+
+
+@router.get("/notifications")
+async def list_notifications(db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
+    from app.models import Notification
+    result = await db.execute(
+        select(Notification).where(Notification.user_id == current_user.id).order_by(Notification.created_at.desc()).limit(50)
+    )
+    items = result.scalars().all()
+    unread = await db.execute(
+        select(func.count(Notification.id)).where(Notification.user_id == current_user.id, Notification.is_read == False)
+    )
+    return {
+        "unread_count": unread.scalar() or 0,
+        "items": [
+            {
+                "id": n.id,
+                "contact_wa_id": n.contact_wa_id,
+                "type": n.type,
+                "title": n.title,
+                "body": n.body,
+                "is_read": n.is_read,
+                "created_at": n.created_at.isoformat() if n.created_at else None,
+            }
+            for n in items
+        ],
+    }
+
+
+@router.post("/notifications/{notif_id}/read")
+async def read_notification(notif_id: int, db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
+    from app.models import Notification
+    from sqlalchemy import update
+    await db.execute(
+        update(Notification).where(Notification.id == notif_id, Notification.user_id == current_user.id).values(is_read=True)
+    )
+    await db.commit()
+    return {"status": "ok"}
+
+
+@router.post("/notifications/read-all")
+async def read_all_notifications(db: AsyncSession = Depends(get_db), current_user: User = Depends(get_current_user)):
+    from app.models import Notification
+    from sqlalchemy import update
+    await db.execute(
+        update(Notification).where(Notification.user_id == current_user.id, Notification.is_read == False).values(is_read=True)
+    )
+    await db.commit()
+    return {"status": "ok"}

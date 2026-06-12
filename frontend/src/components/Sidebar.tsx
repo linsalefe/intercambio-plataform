@@ -17,6 +17,7 @@ import {
   GraduationCap,
   Zap,
 } from 'lucide-react';
+import NotificationBell from './NotificationBell';
 
 const menuItems = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
@@ -144,6 +145,8 @@ export default function Sidebar() {
             </div>
           </div>
         )}
+
+        <NotificationBell collapsed={collapsed} />
 
         <button
           onClick={handleLogout}

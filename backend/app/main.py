@@ -37,6 +37,55 @@ async def sync_job():
             print(f"❌ Erro no sync Exact Sales: {e}")
 
 
+async def window_alerts_job():
+    """Alerta o SDR dono quando o lead aguarda resposta e cruza 1h/3h/5h/20h (janela de 24h)."""
+    from sqlalchemy import text as sa_text
+    from app.models import Notification
+    thresholds = [(1, "window_1h", "1h"), (3, "window_3h", "3h"), (5, "window_5h", "5h"), (20, "window_20h", "20h")]
+    while True:
+        await asyncio.sleep(300)
+        try:
+            async with async_session() as db:
+                now = datetime.now(SP_TZ).replace(tzinfo=None)
+                cutoff = now - timedelta(hours=24)
+                rows = (await db.execute(sa_text("""
+                    SELECT c.wa_id, c.name, c.assigned_to,
+                           lm.wa_message_id AS ref, lm.timestamp AS ts
+                    FROM contacts c
+                    JOIN LATERAL (
+                        SELECT wa_message_id, timestamp, direction
+                        FROM messages WHERE contact_wa_id = c.wa_id
+                        ORDER BY timestamp DESC LIMIT 1
+                    ) lm ON true
+                    WHERE c.assigned_to IS NOT NULL
+                      AND lm.direction = 'inbound'
+                      AND lm.timestamp >= :cutoff
+                """), {"cutoff": cutoff})).fetchall()
+                created = 0
+                for r in rows:
+                    elapsed_h = (now - r.ts).total_seconds() / 3600.0
+                    for hours, ntype, label in thresholds:
+                        if elapsed_h >= hours:
+                            exists = (await db.execute(sa_text(
+                                "SELECT 1 FROM notifications WHERE contact_wa_id = :wa AND type = :t AND ref = :ref LIMIT 1"
+                            ), {"wa": r.wa_id, "t": ntype, "ref": r.ref})).first()
+                            if not exists:
+                                db.add(Notification(
+                                    user_id=r.assigned_to,
+                                    contact_wa_id=r.wa_id,
+                                    type=ntype,
+                                    ref=r.ref,
+                                    title=f"Lead aguardando há {label}",
+                                    body=f"{r.name or r.wa_id} sem resposta — janela de 24h correndo.",
+                                ))
+                                created += 1
+                await db.commit()
+                if created:
+                    print(f"🔔 Alertas de janela criados: {created}")
+        except Exception as e:
+            print(f"❌ Erro no window_alerts_job: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     sync_enabled = os.getenv("EXACT_SYNC_ENABLED", "false").lower() == "true"
@@ -46,9 +95,12 @@ async def lifespan(app: FastAPI):
         print("✅ Sync Exact Sales agendado (a cada 10 min)")
     else:
         print("⏸️ Sync Exact Sales DESATIVADO (defina EXACT_SYNC_ENABLED=true para ativar)")
+    window_task = asyncio.create_task(window_alerts_job())
+    print("✅ Alertas de janela 24h agendados (a cada 5 min)")
     yield
     if task:
         task.cancel()
+    window_task.cancel()
 
 
 app = FastAPI(title="Intercâmbio Platform API", lifespan=lifespan)
