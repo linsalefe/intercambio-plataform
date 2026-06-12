@@ -217,3 +217,17 @@ class ScheduledMessage(Base):
 
     contact = relationship("Contact", backref="scheduled_messages")
     channel = relationship("Channel", backref="scheduled_messages")
+
+
+class Notification(Base):
+    __tablename__ = "notifications"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False, index=True)
+    contact_wa_id = Column(String(20), nullable=True, index=True)
+    type = Column(String(30), nullable=False)
+    ref = Column(String(255), nullable=True)
+    title = Column(String(255), nullable=False)
+    body = Column(Text, nullable=True)
+    is_read = Column(Boolean, default=False, index=True)
+    created_at = Column(DateTime, server_default=func.now())
